@@ -1,0 +1,89 @@
+---
+image: registry.gitlab.com/gitlab-org/terraform-images/stable:latest
+
+variables:
+  TF_ROOT: ${CI_PROJECT_DIR}
+  TF_ADDRESS: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/gitlab
+
+cache:
+  key: gitlab
+  paths:
+    - ${TF_ROOT}/.terraform
+
+before_script:
+  - cd ${TF_ROOT}
+
+stages:
+  - lint
+  - prepare
+  - validate
+  - plan
+  - price
+  - deploy
+
+# init:
+#   stage: prepare
+#   script:
+#     - gitlab-terraform init
+
+validate:
+  stage: validate
+  script:
+    - gitlab-terraform validate
+
+checkov:
+  stage: validate
+  allow_failure: true  # True for AutoDevOps compatibility
+  image:
+    name: bridgecrew/checkov:latest
+    entrypoint:
+      - '/usr/bin/env'
+    #   - 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+  rules:
+    - if: $SAST_DISABLED
+      when: never
+    - if: $CI_COMMIT_BRANCH
+      exists:
+        - '**/*.yml'
+        - '**/*.yaml'
+        - '**/*.json'
+        - '**/*.template'
+        - '**/*.tf'
+        - '**/serverless.yml'
+        - '**/serverless.yaml'
+  script:
+    - checkov -d . -o junitxml
+      --download-external-modules true
+      --framework terraform
+      | tee checkov.test.xml
+  artifacts:
+    reports:
+      junit: "checkov.test.xml"
+    paths:
+      - "checkov.test.xml"
+
+plan:
+  stage: plan
+  script:
+    - gitlab-terraform plan -var-file eh-pe.tfvars
+    - gitlab-terraform plan-json -var-file eh-pe.tfvars
+  artifacts:
+    name: plan
+    paths:
+      - ${TF_ROOT}/plan.cache
+      - ${TF_ROOT}/plan.json
+    reports:
+      terraform: ${TF_ROOT}/plan.json
+
+apply:
+  stage: deploy
+  environment:
+    name: production
+  script:
+    - gitlab-terraform apply
+  dependencies:
+    - plan
+  when: manual
+  only:
+    - main
+
